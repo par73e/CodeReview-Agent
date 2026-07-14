@@ -1,18 +1,3 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=58"]
 build-backend = "setuptools.build_meta"
-
-[project]
-name = "codereview-agent"
-version = "0.1.0"
-description = "Guided, LLM-first code review agent for Spring Boot + MySQL + Nacos + Vue projects"
-readme = "README.md"
-requires-python = ">=3.9"
-authors = [{ name = "CodeReview Agent Team" }]
-dependencies = []
-
-[project.scripts]
-codereview = "codereview_agent.cli:main"
-
-[tool.setuptools.packages.find]
-include = ["codereview_agent*"]
