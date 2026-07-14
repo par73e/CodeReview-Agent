@@ -173,6 +173,9 @@ def _local_findings(project: ProjectMap) -> List[Issue]:
         "write_without_transaction": ("事务", "轻度 Bug", "写操作缺少可见事务注解", "确认多次写库是否需要 @Transactional；单次操作不一定需要事务。"),
         "controller_direct_mapper": ("分层结构", "优化建议", "Controller 直接访问 Mapper", "将业务编排放在 Service 层，保持 Controller 的接口职责。"),
         "select_star": ("数据库性能", "优化建议", "使用 SELECT *", "明确所需字段；热点查询结合执行计划评估索引。"),
+        "generic_plaintext_secret": ("通用安全", "中等 Bug", "疑似硬编码敏感值", "将敏感值移至安全配置或密钥管理，并轮换已经暴露的凭据。"),
+        "generic_command_execution": ("通用安全", "轻度 Bug", "发现系统命令执行调用", "确认命令和参数均来自可信白名单；无法确认时应进行人工安全审查。"),
+        "generic_large_file": ("通用结构", "优化建议", "文件规模过大", "按职责拆分文件或模块，降低维护和审查成本。"),
     }
     issues: List[Issue] = []
     for signal in project.signals:

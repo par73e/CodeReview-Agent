@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Optional
 
 from .config import AppConfig, load_config, prompt_configuration, redacted_summary
+from .capabilities import build_default_registry
 from .llm import make_client
-from .planner import build_review_plan, estimate_tokens
-from .project_map import build_project_map
+from .planner import estimate_tokens
 from .report import print_project_summary, print_result, write_markdown
 from .review import run_review
 from .scanner import choose_subdirectory, scan_project
@@ -66,9 +66,11 @@ def _review_target(target: Path, config: AppConfig) -> None:
     if not files:
         print("没有发现可审查的 Java、Vue、JS、SQL、YAML 或 MyBatis XML 文件。")
         return
-    project = build_project_map(target, files)
+    capability_run = build_default_registry().analyze(target, files)
+    project = capability_run.project
     print_project_summary(project)
-    tasks = build_review_plan(project)
+    _print_capabilities(capability_run)
+    tasks = capability_run.tasks
     if not tasks:
         print("未能从当前目录构建适用于首版技术栈的审查任务。")
         return
@@ -88,6 +90,7 @@ def _review_target(target: Path, config: AppConfig) -> None:
         print("\n当前为辅助本地检查模式，不会调用大模型，也无法完成深度 AI 审查。")
 
     result = run_review(project, tasks, client)
+    result.uncovered.extend(capability_run.uncovered + capability_run.failures)
     print_result(result)
     if input("是否导出完整 Markdown 审查报告？[y/N]：").strip().lower() in {"y", "yes"}:
         path = write_markdown(result, target)
@@ -106,6 +109,12 @@ def _print_scope() -> None:
 审查边界：接口安全与权限、业务事务、MyBatis/SQL、Nacos/配置、Vue/契约、结构性能。
 模型结论必须提供代码证据；证据不足的结论会标记为需人工确认。
 """.strip())
+
+
+def _print_capabilities(capability_run) -> None:
+    print("\n已启用能力模块：")
+    for selection in capability_run.selections:
+        print("- {0}（{1}，覆盖 {2} 个文件；依据：{3}）".format(selection.name, selection.status, len(selection.claimed_paths), selection.reason))
 
 
 def _install_shortcut() -> None:

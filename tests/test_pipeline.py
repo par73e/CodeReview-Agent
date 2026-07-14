@@ -4,13 +4,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from codereview_agent.config import AppConfig, prompt_configuration
+from codereview_agent.capabilities.base import Capability, CapabilityDetection
+from codereview_agent.capabilities.generic import GenericCapability
+from codereview_agent.capabilities.registry import CapabilityRegistry, build_default_registry
 from codereview_agent.llm import DeepSeekClient
 from codereview_agent.planner import build_review_plan, estimate_tokens
 from codereview_agent.project_map import build_project_map
 from codereview_agent.review import _parse_issues, run_review
 from codereview_agent.scanner import scan_project
 from codereview_agent.llm import ModelReply
-from codereview_agent.types import Usage
+from codereview_agent.types import SourceFile, Usage
 
 
 class FakeModel:
@@ -135,6 +138,48 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual("qwen2.5:3b", config.model)
         self.assertEqual("http://localhost:11434", config.base_url)
         save_config.assert_called_once_with(config)
+
+    def test_spring_capability_claims_known_stack_without_generic_overlap(self):
+        files = scan_project(self.root)
+        run = build_default_registry().analyze(self.root, files)
+        spring = next(item for item in run.selections if item.name == "SpringVue")
+        self.assertGreaterEqual(spring.score, 0.5)
+        self.assertFalse(any(item.name == "Generic" for item in run.selections))
+        self.assertTrue(any(task.domain == "接口安全与权限" for task in run.tasks))
+
+    def test_generic_capability_claims_only_uncovered_code_in_mixed_project(self):
+        self._write("tools/check.go", "package tools\nfunc Check() { secret := \"not-for-production\" }\n")
+        files = scan_project(self.root)
+        run = build_default_registry().analyze(self.root, files)
+        spring = next(item for item in run.selections if item.name == "SpringVue")
+        generic = next(item for item in run.selections if item.name == "Generic")
+        self.assertIn("tools/check.go", generic.claimed_paths)
+        self.assertFalse(set(spring.claimed_paths).intersection(generic.claimed_paths))
+        self.assertTrue(any(task.task_id.startswith("generic.") for task in run.tasks))
+
+    def test_unknown_project_uses_generic_capability(self):
+        source = SourceFile(self.root / "main.go", "main.go", "go", "package main\nfunc main() {}\n", 2)
+        run = build_default_registry().analyze(self.root, [source])
+        self.assertEqual(["Generic"], [item.name for item in run.selections])
+        self.assertTrue(run.tasks)
+
+    def test_failed_specialized_capability_falls_back_to_generic(self):
+        class BrokenCapability(Capability):
+            name = "Broken"
+
+            def detect(self, files):
+                return CapabilityDetection(self.name, 1.0, "测试失败模块")
+
+            def claim_files(self, files):
+                return files
+
+            def analyze(self, root, files):
+                raise RuntimeError("预期失败")
+
+        source = SourceFile(self.root / "main.go", "main.go", "go", "package main\nfunc main() {}\n", 2)
+        run = CapabilityRegistry([BrokenCapability(), GenericCapability()]).analyze(self.root, [source])
+        self.assertTrue(run.failures)
+        self.assertEqual("Generic", run.selections[-1].name)
 
 
 if __name__ == "__main__":

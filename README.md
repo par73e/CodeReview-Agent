@@ -40,6 +40,7 @@ codereview config
 ## 当前能力
 
 - 引导式选择当前目录或子目录审查。
+- 能力模块化选择：SpringVue 模块深度审查 Spring Boot + MyBatis + Nacos + Vue；Generic 模块保守审查未被专属模块覆盖的代码。
 - 识别 Java/Spring Boot、MyBatis/SQL、Nacos/YAML、Vue/JavaScript 文件和关键关系。
 - 将高风险入口、写操作、权限、数据库、配置与前端边界拆成带上下文的模型审查任务。
 - 对严重问题发起独立二次复核。
@@ -51,3 +52,12 @@ codereview config
 - Ollama 模式仅调用本机 `http://localhost:11434`。
 - 无模型模式只执行少量确定性辅助检查，不能代替深度 AI 审查。
 - 审查结论需要人工确认，尤其是标为“需人工确认”的项目。
+
+## 能力模块
+
+Agent 会先识别项目，再组合能力模块。当前内置：
+
+- `SpringVue`：覆盖 Java、Vue、JS/TS、SQL、MyBatis XML、Spring/Nacos YAML，提供专属关系图和审查边界。
+- `Generic`：只审查没有被专属模块覆盖的常见代码文件；不对未知框架作无证据断言。
+
+未来支持 Go、C++ 等技术栈时，只需新增能力模块并注册，无需改动模型调用、结果分级和报告流程。
