@@ -64,19 +64,23 @@ def prompt_configuration(existing: Optional[AppConfig] = None) -> AppConfig:
     choice = input("请选择 [1-3]：").strip()
 
     if choice == "1":
-        key = input("请输入 DeepSeek API Key：").strip()
+        saved_deepseek = existing if existing and existing.provider == "deepseek" else None
+        key_prompt = "请输入 DeepSeek API Key：" if not saved_deepseek else "请输入 DeepSeek API Key（回车保留已保存的 Key）："
+        key = input(key_prompt).strip() or (saved_deepseek.api_key if saved_deepseek else "")
         print("请选择 DeepSeek 模型：")
         print("1. deepseek-v4-flash（速度快、成本低，推荐日常审查）")
         print("2. deepseek-v4-pro（分析更深入、成本更高）")
         print("3. 手动输入模型名")
-        model_choice = input("请选择 [1-3，默认 1]：").strip() or "1"
+        default_choice = "2" if saved_deepseek and saved_deepseek.model == "deepseek-v4-pro" else "1"
+        model_choice = input("请选择 [1-3，默认 {0}]：".format(default_choice)).strip() or default_choice
         if model_choice == "2":
             model = "deepseek-v4-pro"
         elif model_choice == "3":
             model = input("请输入模型名：").strip() or "deepseek-v4-flash"
         else:
             model = "deepseek-v4-flash"
-        base_url = input("API 地址 [https://api.deepseek.com]：").strip() or "https://api.deepseek.com"
+        default_url = saved_deepseek.base_url if saved_deepseek else "https://api.deepseek.com"
+        base_url = input("API 地址 [{0}]：".format(default_url)).strip() or default_url
         config = AppConfig("deepseek", model, key, base_url.rstrip("/"))
     elif choice == "2":
         model = input("本地模型名（例如 qwen2.5-coder:7b）：").strip()
