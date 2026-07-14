@@ -29,6 +29,8 @@ source ~/.zshrc
 python3 /Users/louis/上电/Project/CRA/run_agent.py
 ```
 
+在本仓库中执行一次 `./run install`，按提示确认后，会创建用户自己的 `codereview` 快捷命令；之后可在任意项目目录直接运行 `codereview`。
+
 首次启动会引导选择 DeepSeek、Ollama 或辅助本地检查，并将默认配置保存到 `~/.codereview/config.json`。之后执行 `codereview` 会直接使用该配置；需要修改时执行：
 
 ```bash

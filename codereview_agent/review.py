@@ -12,7 +12,7 @@ from .types import Issue, ProjectMap, ReviewResult, ReviewTask, Usage
 REVIEW_SYSTEM = """你是 CodeReview Agent 的受约束代码审查引擎。你只审查提供的代码和事实关系，
 不能根据缺失信息猜测。每个结论必须有文件、行号或明确代码证据，以及可复现的触发/调用路径。
 安全问题必须说明外部输入、处理过程和危险落点。没有足够证据时必须标为 needs_human_confirmation=true。
-只输出 JSON 对象，不要使用 Markdown。JSON 必须为：
+只输出 JSON 对象，不要使用 Markdown。每个任务最多报告 3 个证据最充分、优先级最高的问题；每个文本字段保持简洁，避免超过 80 个汉字。JSON 必须为：
 {"issues":[{"category":"...","severity":"严重 Bug|中等 Bug|轻度 Bug|优化建议","title":"...","file":"...","line":1,"evidence":"...","trigger_path":"...","impact":"...","recommendation":"...","confidence":"高|中|低","needs_human_confirmation":false}]}。
 不得输出没有代码依据的泛泛建议。"""
 
@@ -31,10 +31,7 @@ def run_review(project: ProjectMap, tasks: List[ReviewTask], client: Optional[Mo
     for index, task in enumerate(tasks, start=1):
         output("[{0}/{1}] 正在审查：{2}".format(index, len(tasks), task.domain))
         try:
-            payload = build_context(project, task)
-            reply = client.review(REVIEW_SYSTEM, payload, 1300)
-            result.usage.add(reply.usage)
-            parsed = _parse_issues(reply.content, task.task_id)
+            parsed = _review_task(project, task, client, result.usage, output)
             result.issues.extend(parsed)
             output("  完成：发现 {0} 个候选问题；累计 Token {1}".format(len(parsed), result.usage.total_tokens))
         except ModelError as error:
@@ -45,6 +42,24 @@ def run_review(project: ProjectMap, tasks: List[ReviewTask], client: Optional[Mo
     result.issues = _deduplicate(_validate_evidence(project, result.issues))
     _verify_critical(project, result, client, output)
     return result
+
+
+def _review_task(project: ProjectMap, task: ReviewTask, client: ModelClient, usage: Usage, output=print) -> List[Issue]:
+    """Retry once with stricter output limits when a provider truncates invalid JSON."""
+    payload = build_context(project, task)
+    for attempt in range(2):
+        request = payload
+        if attempt:
+            request += "\n\n上一次输出不是有效 JSON。请重新审查，但最多输出 2 个最重要问题；所有字段必须是单行短句，严格输出完整 JSON。"
+            output("  模型 JSON 格式无效，正在以更严格的输出限制重试一次。")
+        reply = client.review(REVIEW_SYSTEM, request, 1300)
+        usage.add(reply.usage)
+        try:
+            return _parse_issues(reply.content, task.task_id)
+        except ModelError:
+            if attempt:
+                raise
+    return []
 
 
 def _parse_issues(content: str, task_id: str) -> List[Issue]:

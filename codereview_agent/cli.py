@@ -15,10 +15,13 @@ from .scanner import choose_subdirectory, scan_project
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CodeReview Agent - guided LLM-first code review")
-    parser.add_argument("command", nargs="?", choices=["config"], help="运行 config 修改默认模型配置")
+    parser.add_argument("command", nargs="?", choices=["config", "install"], help="运行 config 修改模型；运行 install 注册 codereview 快捷命令")
     args = parser.parse_args()
     if args.command == "config":
         prompt_configuration(load_config())
+        return
+    if args.command == "install":
+        _install_shortcut()
         return
 
     config = load_config()
@@ -103,3 +106,38 @@ def _print_scope() -> None:
 审查边界：接口安全与权限、业务事务、MyBatis/SQL、Nacos/配置、Vue/契约、结构性能。
 模型结论必须提供代码证据；证据不足的结论会标记为需人工确认。
 """.strip())
+
+
+def _install_shortcut() -> None:
+    """Create a user-owned shortcut only after explicit confirmation."""
+    source = Path(__file__).resolve().parents[1] / "run"
+    bin_dir = Path.home() / ".local" / "bin"
+    target = bin_dir / "codereview"
+    path_line = 'export PATH="$HOME/.local/bin:$PATH"'
+    zshrc = Path.home() / ".zshrc"
+    print("将创建快捷命令：{0} -> {1}".format(target, source))
+    if input("是否继续？[y/N]：").strip().lower() not in {"y", "yes"}:
+        print("已取消。")
+        return
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() and target.resolve() == source:
+            print("快捷命令已经存在。")
+        else:
+            print("未修改现有文件：{0}".format(target))
+            return
+    else:
+        target.symlink_to(source)
+        print("快捷命令已创建。")
+    existing = zshrc.read_text(encoding="utf-8") if zshrc.exists() else ""
+    if path_line not in existing:
+        if input("是否将 ~/.local/bin 加入 zsh PATH？[y/N]：").strip().lower() in {"y", "yes"}:
+            with zshrc.open("a", encoding="utf-8") as handle:
+                if existing and not existing.endswith("\n"):
+                    handle.write("\n")
+                handle.write(path_line + "\n")
+            print("已更新 ~/.zshrc。请执行 source ~/.zshrc 或重新打开终端。")
+        else:
+            print("未修改 PATH；可通过完整路径运行：" + str(target))
+    else:
+        print("PATH 已包含 ~/.local/bin；现在可直接运行 codereview。")

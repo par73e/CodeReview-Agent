@@ -65,7 +65,17 @@ def prompt_configuration(existing: Optional[AppConfig] = None) -> AppConfig:
 
     if choice == "1":
         key = input("请输入 DeepSeek API Key：").strip()
-        model = input("模型名 [deepseek-v4-flash]：").strip() or "deepseek-v4-flash"
+        print("请选择 DeepSeek 模型：")
+        print("1. deepseek-v4-flash（速度快、成本低，推荐日常审查）")
+        print("2. deepseek-v4-pro（分析更深入、成本更高）")
+        print("3. 手动输入模型名")
+        model_choice = input("请选择 [1-3，默认 1]：").strip() or "1"
+        if model_choice == "2":
+            model = "deepseek-v4-pro"
+        elif model_choice == "3":
+            model = input("请输入模型名：").strip() or "deepseek-v4-flash"
+        else:
+            model = "deepseek-v4-flash"
         base_url = input("API 地址 [https://api.deepseek.com]：").strip() or "https://api.deepseek.com"
         config = AppConfig("deepseek", model, key, base_url.rstrip("/"))
     elif choice == "2":

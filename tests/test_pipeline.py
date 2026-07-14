@@ -17,6 +17,17 @@ class FakeModel:
         return ModelReply('''{"issues":[{"category":"接口安全","severity":"严重 Bug","title":"缺少接口鉴权","file":"src/main/java/demo/UserController.java","line":5,"evidence":"@GetMapping(\\"/users\\") 方法中没有可见鉴权检查","trigger_path":"外部请求 /users -> UserController.users","impact":"未授权用户可能读取用户数据","recommendation":"接入统一鉴权并在服务端验证访问主体","confidence":"高","needs_human_confirmation":false}]}''', Usage(20, 10, 30))
 
 
+class RetryModel:
+    def __init__(self):
+        self.calls = 0
+
+    def review(self, system, user, max_tokens):
+        self.calls += 1
+        if self.calls == 1:
+            return ModelReply('{"issues":[{"title":"truncated"', Usage(20, 1300, 1320))
+        return ModelReply('''{"issues":[{"category":"结构","severity":"优化建议","title":"Service 方法可拆分","file":"src/main/java/demo/UserService.java","line":3,"evidence":"save 方法承载多个职责","trigger_path":"业务服务调用","impact":"可维护性下降","recommendation":"按职责拆分私有方法","confidence":"中","needs_human_confirmation":false}]}''', Usage(20, 50, 70))
+
+
 class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -84,6 +95,16 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual("严重 Bug", result.issues[0].severity)
         self.assertEqual("二次复核成立", result.issues[0].review_status)
         self.assertGreater(result.usage.total_tokens, 0)
+
+    def test_invalid_model_json_retries_with_stricter_request(self):
+        files = scan_project(self.root)
+        project = build_project_map(self.root, files)
+        tasks = build_review_plan(project)
+        model = RetryModel()
+        result = run_review(project, tasks, client=model, output=lambda _: None)
+        self.assertTrue(result.issues)
+        self.assertEqual([], result.failed_tasks)
+        self.assertGreater(model.calls, len(tasks))
 
 
 if __name__ == "__main__":
