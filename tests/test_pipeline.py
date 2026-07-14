@@ -4,7 +4,7 @@ from pathlib import Path
 
 from codereview_agent.planner import build_review_plan, estimate_tokens
 from codereview_agent.project_map import build_project_map
-from codereview_agent.review import run_review
+from codereview_agent.review import _parse_issues, run_review
 from codereview_agent.scanner import scan_project
 from codereview_agent.llm import ModelReply
 from codereview_agent.types import Usage
@@ -12,8 +12,8 @@ from codereview_agent.types import Usage
 
 class FakeModel:
     def review(self, system, user, max_tokens):
-        if "独立安全结论复核器" in system:
-            return ModelReply('{"verdict":"成立","reason":"路由可直接访问且没有鉴权证据。"}', Usage(10, 5, 15))
+        if "独立严重等级复核器" in system:
+            return ModelReply('{"verdict":"成立","recommended_severity":"严重 Bug","reason":"路由可直接访问且没有鉴权证据。"}', Usage(10, 5, 15))
         return ModelReply('''{"issues":[{"category":"接口安全","severity":"严重 Bug","title":"缺少接口鉴权","file":"src/main/java/demo/UserController.java","line":5,"evidence":"@GetMapping(\\"/users\\") 方法中没有可见鉴权检查","trigger_path":"外部请求 /users -> UserController.users","impact":"未授权用户可能读取用户数据","recommendation":"接入统一鉴权并在服务端验证访问主体","confidence":"高","needs_human_confirmation":false}]}''', Usage(20, 10, 30))
 
 
@@ -105,6 +105,10 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(result.issues)
         self.assertEqual([], result.failed_tasks)
         self.assertGreater(model.calls, len(tasks))
+
+    def test_string_false_does_not_skip_critical_verification(self):
+        issues = _parse_issues('''{"issues":[{"category":"安全","severity":"严重 Bug","title":"test","file":"A.java","line":1,"evidence":"e","trigger_path":"p","impact":"i","recommendation":"r","confidence":"高","needs_human_confirmation":"false"}]}''', "test")
+        self.assertFalse(issues[0].needs_human_confirmation)
 
 
 if __name__ == "__main__":

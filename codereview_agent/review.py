@@ -12,13 +12,16 @@ from .types import Issue, ProjectMap, ReviewResult, ReviewTask, Usage
 REVIEW_SYSTEM = """你是 CodeReview Agent 的受约束代码审查引擎。你只审查提供的代码和事实关系，
 不能根据缺失信息猜测。每个结论必须有文件、行号或明确代码证据，以及可复现的触发/调用路径。
 安全问题必须说明外部输入、处理过程和危险落点。没有足够证据时必须标为 needs_human_confirmation=true。
-只输出 JSON 对象，不要使用 Markdown。每个任务最多报告 3 个证据最充分、优先级最高的问题；每个文本字段保持简洁，避免超过 80 个汉字。JSON 必须为：
+只输出 JSON 对象，不要使用 Markdown。每个任务最多报告 3 个证据最充分、优先级最高的问题；每个文本字段保持简洁，避免超过 80 个汉字。needs_human_confirmation 必须是 JSON 布尔值 true 或 false，不能是字符串。JSON 必须为：
 {"issues":[{"category":"...","severity":"严重 Bug|中等 Bug|轻度 Bug|优化建议","title":"...","file":"...","line":1,"evidence":"...","trigger_path":"...","impact":"...","recommendation":"...","confidence":"高|中|低","needs_human_confirmation":false}]}。
+例如：{"issues":[{"category":"参数校验","severity":"中等 Bug","title":"缺少请求参数校验","file":"UserController.java","line":18,"evidence":"接口参数未使用校验注解","trigger_path":"POST /users","impact":"非法参数可能进入业务层","recommendation":"为 DTO 添加校验注解并启用 @Valid","confidence":"高","needs_human_confirmation":false}]}。
 不得输出没有代码依据的泛泛建议。"""
 
-VERIFY_SYSTEM = """你是独立安全结论复核器。只根据提供的原始结论、代码证据和调用关系判定严重 Bug。
-不要提出新问题。只输出 JSON：{"verdict":"成立|不成立|证据不足","reason":"..."}。
-“成立”必须能证明高影响问题可由提供代码触发；“证据不足”不能当作成立。"""
+VERIFY_SYSTEM = """你是独立严重等级复核器。只根据提供的原始结论、代码证据和调用关系判定严重等级。
+不要提出新问题。只输出 JSON：{"verdict":"成立|不成立|证据不足","recommended_severity":"严重 Bug|中等 Bug|轻度 Bug|优化建议|需人工确认","reason":"..."}。
+“严重 Bug”必须同时证明外部可利用或必然触发，以及安全、数据破坏或服务不可用的高影响。
+仅看到明文配置、重复 YAML 键、Redis KEYS、前端未做路由守卫、或“可能”造成影响时，不能仅凭该代码判为严重 Bug；应降为中等、轻度、优化建议或需人工确认。
+内部接口是否真实暴露、配置是否会泄露、后端是否有统一鉴权等缺少代码证据时，必须为“证据不足”。"""
 
 
 def run_review(project: ProjectMap, tasks: List[ReviewTask], client: Optional[ModelClient], output=print) -> ReviewResult:
@@ -52,7 +55,7 @@ def _review_task(project: ProjectMap, task: ReviewTask, client: ModelClient, usa
         if attempt:
             request += "\n\n上一次输出不是有效 JSON。请重新审查，但最多输出 2 个最重要问题；所有字段必须是单行短句，严格输出完整 JSON。"
             output("  模型 JSON 格式无效，正在以更严格的输出限制重试一次。")
-        reply = client.review(REVIEW_SYSTEM, request, 1300)
+        reply = client.review(REVIEW_SYSTEM, request, 1600)
         usage.add(reply.usage)
         try:
             return _parse_issues(reply.content, task.task_id)
@@ -86,7 +89,7 @@ def _parse_issues(content: str, task_id: str) -> List[Issue]:
             evidence=str(raw.get("evidence", "")), trigger_path=str(raw.get("trigger_path", "")),
             impact=str(raw.get("impact", "")), recommendation=str(raw.get("recommendation", "")),
             confidence=str(raw.get("confidence", "低")),
-            needs_human_confirmation=bool(raw.get("needs_human_confirmation", False)), task_id=task_id,
+            needs_human_confirmation=_as_bool(raw.get("needs_human_confirmation", False)), task_id=task_id,
         ))
     return issues
 
@@ -101,8 +104,11 @@ def _verify_critical(project: ProjectMap, result: ReviewResult, client: ModelCli
             result.usage.add(reply.usage)
             data = json.loads(_extract_json(reply.content))
             verdict = str(data.get("verdict", "证据不足"))
-            if verdict == "成立":
-                issue.review_status = "二次复核成立"
+            recommended = _normalise_severity(str(data.get("recommended_severity", "需人工确认")))
+            if verdict == "成立" and recommended != "需人工确认":
+                issue.severity = recommended
+                issue.needs_human_confirmation = False
+                issue.review_status = "二次复核成立" if recommended == "严重 Bug" else "二次复核成立，已校准为 " + recommended
             elif verdict == "不成立":
                 issue.review_status = "二次复核不成立"
                 issue.needs_human_confirmation = True
@@ -188,6 +194,14 @@ def _normalise_severity(value: str) -> str:
     if normalized in {"优化建议", "优化", "optimization", "info"}:
         return "优化建议"
     return "需人工确认"
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "是"}
+    return bool(value)
 
 
 def _extract_json(text: str) -> str:

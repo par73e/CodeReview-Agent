@@ -36,6 +36,7 @@ class DeepSeekClient(ModelClient):
             "response_format": {"type": "json_object"},
             "temperature": 0.1,
             "max_tokens": max_tokens,
+            "thinking": {"type": "disabled"},
             "stream": False,
         }
         data = _post_json(self.config.base_url + "/chat/completions", payload, {"Authorization": "Bearer " + self.config.api_key})

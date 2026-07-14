@@ -61,7 +61,7 @@ def build_review_plan(project: ProjectMap) -> List[ReviewTask]:
     return tasks
 
 
-def estimate_tokens(project: ProjectMap, tasks: List[ReviewTask], output_per_task: int = 1300) -> Dict[str, int]:
+def estimate_tokens(project: ProjectMap, tasks: List[ReviewTask], output_per_task: int = 1600) -> Dict[str, int]:
     source_by_path = {item.relative_path: item for item in project.files}
     input_chars = 0
     for task in tasks:
