@@ -1,4 +1,16 @@
 #!/usr/bin/env sh
 
-# Run CodeReview Agent from this repository without installing it.
-exec python3 "$(dirname "$0")/run_agent.py" "$@"
+# Resolve a possible ~/.local/bin/codereview symlink before locating the
+# repository entry point. macOS readlink does not support GNU readlink -f.
+SCRIPT_PATH="$0"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+  LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+  case "$LINK_TARGET" in
+    /*) SCRIPT_PATH="$LINK_TARGET" ;;
+    *) SCRIPT_PATH="$SCRIPT_DIR/$LINK_TARGET" ;;
+  esac
+done
+
+REPOSITORY_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+exec python3 "$REPOSITORY_DIR/run_agent.py" "$@"
