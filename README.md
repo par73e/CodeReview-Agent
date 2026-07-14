@@ -1,2 +1,0 @@
-# CRA
-CodeReview Agent
