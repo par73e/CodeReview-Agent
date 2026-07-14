@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codereview_agent.config import AppConfig
+from codereview_agent.config import AppConfig, prompt_configuration
 from codereview_agent.llm import DeepSeekClient
 from codereview_agent.planner import build_review_plan, estimate_tokens
 from codereview_agent.project_map import build_project_map
@@ -126,6 +126,15 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual({"type": "json_object"}, payload["response_format"])
         self.assertEqual({"type": "disabled"}, payload["thinking"])
         self.assertEqual(1600, payload["max_tokens"])
+
+    @patch("codereview_agent.config.save_config")
+    @patch("builtins.input", side_effect=["2", "", ""])
+    def test_ollama_configuration_uses_qwen_default(self, mocked_input, save_config):
+        config = prompt_configuration()
+        self.assertEqual("ollama", config.provider)
+        self.assertEqual("qwen2.5:3b", config.model)
+        self.assertEqual("http://localhost:11434", config.base_url)
+        save_config.assert_called_once_with(config)
 
 
 if __name__ == "__main__":

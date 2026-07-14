@@ -10,6 +10,10 @@ from typing import Optional
 
 CONFIG_DIR = Path.home() / ".codereview"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:3b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
 @dataclass
@@ -57,34 +61,39 @@ def redacted_summary(config: AppConfig) -> str:
 
 def prompt_configuration(existing: Optional[AppConfig] = None) -> AppConfig:
     """Run a deliberately small, guided configuration wizard."""
+    provider_defaults = {"deepseek": "1", "ollama": "2", "local": "3"}
+    default_provider = provider_defaults.get(existing.provider, "1") if existing else "1"
     print("\n模型配置")
-    print("1. DeepSeek API（代码上下文会发送至 DeepSeek）")
-    print("2. 本地 Ollama（代码只发送至本机 Ollama 服务）")
-    print("3. 辅助本地检查（不使用大模型）")
-    choice = input("请选择 [1-3]：").strip()
+    print("  1. DeepSeek API（代码上下文会发送至 DeepSeek）")
+    print("  2. 本地 Ollama（代码只发送至本机 Ollama 服务）")
+    print("  3. 辅助本地检查（不使用大模型）")
+    choice = input("模型提供方 [默认: {0}]：".format(default_provider)).strip() or default_provider
 
     if choice == "1":
         saved_deepseek = existing if existing and existing.provider == "deepseek" else None
-        key_prompt = "请输入 DeepSeek API Key：" if not saved_deepseek else "请输入 DeepSeek API Key（回车保留已保存的 Key）："
+        key_prompt = "DeepSeek API Key：" if not saved_deepseek else "DeepSeek API Key [已保存，回车保留]："
         key = input(key_prompt).strip() or (saved_deepseek.api_key if saved_deepseek else "")
-        print("请选择 DeepSeek 模型：")
-        print("1. deepseek-v4-flash（速度快、成本低，推荐日常审查）")
-        print("2. deepseek-v4-pro（分析更深入、成本更高）")
-        print("3. 手动输入模型名")
+        print("\nDeepSeek 模型")
+        print("  1. deepseek-v4-flash（速度快、成本低）")
+        print("  2. deepseek-v4-pro（分析更深入、成本更高）")
+        print("  3. 手动输入模型名")
         default_choice = "2" if saved_deepseek and saved_deepseek.model == "deepseek-v4-pro" else "1"
-        model_choice = input("请选择 [1-3，默认 {0}]：".format(default_choice)).strip() or default_choice
+        model_choice = input("模型选项 [默认: {0}]：".format(default_choice)).strip() or default_choice
         if model_choice == "2":
             model = "deepseek-v4-pro"
         elif model_choice == "3":
-            model = input("请输入模型名：").strip() or "deepseek-v4-flash"
+            model = input("DeepSeek 模型名 [默认: {0}]：".format(DEFAULT_DEEPSEEK_MODEL)).strip() or DEFAULT_DEEPSEEK_MODEL
         else:
-            model = "deepseek-v4-flash"
-        default_url = saved_deepseek.base_url if saved_deepseek else "https://api.deepseek.com"
-        base_url = input("API 地址 [{0}]：".format(default_url)).strip() or default_url
+            model = DEFAULT_DEEPSEEK_MODEL
+        default_url = saved_deepseek.base_url if saved_deepseek else DEFAULT_DEEPSEEK_URL
+        base_url = input("DeepSeek API 地址 [默认: {0}]：".format(default_url)).strip() or default_url
         config = AppConfig("deepseek", model, key, base_url.rstrip("/"))
     elif choice == "2":
-        model = input("本地模型名（例如 qwen2.5-coder:7b）：").strip()
-        base_url = input("Ollama 地址 [http://localhost:11434]：").strip() or "http://localhost:11434"
+        saved_ollama = existing if existing and existing.provider == "ollama" else None
+        default_model = saved_ollama.model if saved_ollama and saved_ollama.model else DEFAULT_OLLAMA_MODEL
+        default_url = saved_ollama.base_url if saved_ollama and saved_ollama.base_url else DEFAULT_OLLAMA_URL
+        model = input("Ollama 模型名 [默认: {0}]：".format(default_model)).strip() or default_model
+        base_url = input("Ollama API 地址 [默认: {0}]：".format(default_url)).strip() or default_url
         config = AppConfig("ollama", model, "", base_url.rstrip("/"))
     elif choice == "3":
         config = AppConfig()
@@ -93,5 +102,5 @@ def prompt_configuration(existing: Optional[AppConfig] = None) -> AppConfig:
         config = AppConfig()
 
     save_config(config)
-    print("配置已保存到 {0}".format(CONFIG_PATH))
+    print("模型配置已保存。")
     return config
