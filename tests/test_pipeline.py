@@ -1,7 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from codereview_agent.config import AppConfig
+from codereview_agent.llm import DeepSeekClient
 from codereview_agent.planner import build_review_plan, estimate_tokens
 from codereview_agent.project_map import build_project_map
 from codereview_agent.review import _parse_issues, run_review
@@ -109,6 +112,20 @@ class PipelineTests(unittest.TestCase):
     def test_string_false_does_not_skip_critical_verification(self):
         issues = _parse_issues('''{"issues":[{"category":"安全","severity":"严重 Bug","title":"test","file":"A.java","line":1,"evidence":"e","trigger_path":"p","impact":"i","recommendation":"r","confidence":"高","needs_human_confirmation":"false"}]}''', "test")
         self.assertFalse(issues[0].needs_human_confirmation)
+
+    @patch("codereview_agent.llm._post_json")
+    def test_deepseek_pro_uses_json_mode_with_thinking_disabled(self, post_json):
+        post_json.return_value = {
+            "choices": [{"message": {"content": "{\"issues\":[]}"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        client = DeepSeekClient(AppConfig("deepseek", "deepseek-v4-pro", "test-key", "https://api.deepseek.com"))
+        client.review("system", "user", 1600)
+        payload = post_json.call_args.args[1]
+        self.assertEqual("deepseek-v4-pro", payload["model"])
+        self.assertEqual({"type": "json_object"}, payload["response_format"])
+        self.assertEqual({"type": "disabled"}, payload["thinking"])
+        self.assertEqual(1600, payload["max_tokens"])
 
 
 if __name__ == "__main__":
