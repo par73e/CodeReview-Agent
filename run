@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+# Run CodeReview Agent from this repository without installing it.
+exec python3 "$(dirname "$0")/run_agent.py" "$@"
