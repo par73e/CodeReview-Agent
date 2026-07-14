@@ -9,9 +9,24 @@
 需要 Python 3.9 或更高版本。
 
 ```bash
-python3 -m pip install -e .
+cd /Users/louis/上电/Project/CRA
+python3 -m pip install --user .
+
 cd /path/to/your/project
-codereview
+"$(python3 -m site --user-base)/bin/codereview"
+```
+
+如果希望以后直接输入 `codereview`，将用户 Python 命令目录加入 zsh 路径后重开终端：
+
+```bash
+echo 'export PATH="$(python3 -m site --user-base)/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+不想安装也可以在待审查项目目录中直接运行：
+
+```bash
+python3 /Users/louis/上电/Project/CRA/run_agent.py
 ```
 
 首次启动会引导选择 DeepSeek、Ollama 或辅助本地检查，并将默认配置保存到 `~/.codereview/config.json`。之后执行 `codereview` 会直接使用该配置；需要修改时执行：
