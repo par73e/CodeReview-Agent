@@ -54,7 +54,7 @@ def _session(root: Path, config: AppConfig) -> None:
         elif choice == "4":
             _print_scope()
         elif choice == "0":
-            print("再见。")
+            print("感谢使用！")
             return
         else:
             print("输入无效，请按菜单选择。")
@@ -72,7 +72,7 @@ def _review_target(target: Path, config: AppConfig) -> None:
     _print_capabilities(capability_run)
     tasks = capability_run.tasks
     if not tasks:
-        print("未能从当前目录构建适用于首版技术栈的审查任务。")
+        print("未能从当前目录构建可执行的能力模块审查任务。")
         return
     print("\n审查计划：")
     for task in tasks:
@@ -99,20 +99,35 @@ def _review_target(target: Path, config: AppConfig) -> None:
 
 def _print_scope() -> None:
     print("""
-首版技术栈：Spring Boot + MySQL + Nacos + Vue。
+审查范围与分级说明
 
-严重 Bug：可证明的安全漏洞、数据破坏或核心不可用问题；必须二次复核。
-中等 Bug：常见场景可能导致异常、错误结果或明显性能问题。
-轻度 Bug：边界条件、规范或低概率风险。
-优化建议：不一定出错，但有明确性能、结构或可读性收益。
+审查范围会根据当前目录中的源代码、配置文件和工程特征自动确定；实际启用的审查范围会显示在每次审查开始后的“项目摘要”和“审查计划”中。
 
-审查边界：接口安全与权限、业务事务、MyBatis/SQL、Nacos/配置、Vue/契约、结构性能。
-模型结论必须提供代码证据；证据不足的结论会标记为需人工确认。
+重点审查方向：
+- 安全性：身份认证与授权、输入处理、敏感信息、注入风险和危险操作。
+- 正确性：空值与边界条件、异常处理、业务流程、数据一致性和事务边界。
+- 数据与配置：SQL 使用、数据库访问、配置安全性和运行参数。
+- 前后端协作：接口契约、数据处理和常见前端安全风险。
+- 质量与性能：职责划分、重复逻辑、资源生命周期、可维护性和可优化的性能瓶颈。
+
+对于尚未适配具体技术栈的代码，系统仅基于可验证的通用事实进行基础审查，不对未知框架行为作推断。
+
+问题分级：
+严重 Bug：已具备明确代码证据，可能造成安全漏洞、敏感数据泄露、数据破坏或核心服务不可用；此类问题会进行独立二次复核。
+中等 Bug：在常见使用场景下可能导致功能异常、错误结果、明显性能下降或安全边界缺失。
+轻度 Bug：边界条件、低概率异常、规范性缺陷或影响较小的潜在风险。
+优化建议：当前不一定会导致错误，但实施后可改善性能、结构、可读性或资源使用。
+
+审查结论：
+- 每项问题均应包含位置、代码证据、可能影响和处理建议。
+- “需人工确认”表示当前证据不足以给出确定结论；它是结论状态，不属于上述问题等级。
+- 本工具仅执行审查，不会修改被审查目录中的代码或配置。
+
 """.strip())
 
 
 def _print_capabilities(capability_run) -> None:
-    print("\n已启用能力模块：")
+    print("\n本次匹配的能力模块：")
     for selection in capability_run.selections:
         print("- {0}（{1}，覆盖 {2} 个文件；依据：{3}）".format(selection.name, selection.status, len(selection.claimed_paths), selection.reason))
 

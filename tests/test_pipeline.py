@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from codereview_agent.config import AppConfig, prompt_configuration
-from codereview_agent.capabilities.base import Capability, CapabilityDetection
+from codereview_agent.capabilities.base import Capability, CapabilityDetection, CapabilityResult
 from codereview_agent.capabilities.generic import GenericCapability
 from codereview_agent.capabilities.registry import CapabilityRegistry, build_default_registry
 from codereview_agent.llm import DeepSeekClient
@@ -13,7 +13,7 @@ from codereview_agent.project_map import build_project_map
 from codereview_agent.review import _parse_issues, run_review
 from codereview_agent.scanner import scan_project
 from codereview_agent.llm import ModelReply
-from codereview_agent.types import SourceFile, Usage
+from codereview_agent.types import ProjectMap, ReviewTask, SourceFile, Usage
 
 
 class FakeModel:
@@ -156,6 +156,40 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("tools/check.go", generic.claimed_paths)
         self.assertFalse(set(spring.claimed_paths).intersection(generic.claimed_paths))
         self.assertTrue(any(task.task_id.startswith("generic.") for task in run.tasks))
+
+    def test_registry_combines_multiple_specialized_modules_before_generic(self):
+        class LanguageCapability(Capability):
+            def __init__(self, name, language):
+                self.name = name
+                self.language = language
+                self.received_paths = []
+
+            def detect(self, files):
+                count = sum(item.language == self.language for item in files)
+                return CapabilityDetection(self.name, 1.0 if count else 0.0, "发现 {0} 个 {1} 文件".format(count, self.language))
+
+            def claim_files(self, files):
+                return [item for item in files if item.language == self.language]
+
+            def analyze(self, root, files):
+                self.received_paths = [item.relative_path for item in files]
+                project = ProjectMap(root, files, [self.name], {}, [], [], [], [], [], [])
+                task = ReviewTask(self.name + ".review", self.name, 10, self.received_paths, [], [], "测试模块任务")
+                return CapabilityResult(self.name, project, [task], self.received_paths, "测试模块")
+
+        java_module = LanguageCapability("Java专属", "java")
+        go_module = LanguageCapability("Go专属", "go")
+        sources = [
+            SourceFile(self.root / "src/App.java", "src/App.java", "java", "class App {}", 1),
+            SourceFile(self.root / "cmd/main.go", "cmd/main.go", "go", "package main", 1),
+        ]
+
+        run = CapabilityRegistry([java_module, go_module, GenericCapability()]).analyze(self.root, sources)
+
+        self.assertEqual(["Java专属", "Go专属"], [item.name for item in run.selections])
+        self.assertEqual(["src/App.java"], java_module.received_paths)
+        self.assertEqual(["cmd/main.go"], go_module.received_paths)
+        self.assertFalse(any(item.name == "Generic" for item in run.selections))
 
     def test_unknown_project_uses_generic_capability(self):
         source = SourceFile(self.root / "main.go", "main.go", "go", "package main\nfunc main() {}\n", 2)

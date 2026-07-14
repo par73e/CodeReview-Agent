@@ -45,13 +45,29 @@ class CapabilityRegistry:
         selections: List[CapabilitySelection] = []
         failures: List[str] = []
         for capability, detection in selected:
+            # A specialization only ever sees files that are still unowned.
+            # This makes the registry extensible: Java, Go, C++ and other
+            # modules can be selected together without reviewing the same file
+            # twice or depending on a Spring-first control flow.
+            available = [item for item in files if item.relative_path not in claimed]
+            owned_files = capability.claim_files(available)
+            if not owned_files:
+                selections.append(CapabilitySelection(
+                    capability.name,
+                    detection.score,
+                    detection.reason + "；没有可接管文件（已由优先模块覆盖）",
+                    [],
+                    "未接管",
+                ))
+                continue
             try:
-                result = capability.analyze(root, files)
-                result.claimed_paths = [path for path in result.claimed_paths if path not in claimed]
-                if result.claimed_paths:
-                    claimed.update(result.claimed_paths)
-                    results.append(result)
-                    selections.append(CapabilitySelection(capability.name, detection.score, detection.reason, result.claimed_paths))
+                result = capability.analyze(root, owned_files)
+                # File ownership is allocated by the registry, not trusted to
+                # each implementation's internal analysis result.
+                result.claimed_paths = [item.relative_path for item in owned_files]
+                claimed.update(result.claimed_paths)
+                results.append(result)
+                selections.append(CapabilitySelection(capability.name, detection.score, detection.reason, result.claimed_paths))
             except Exception as error:  # Capability failure must not block fallback review.
                 failures.append("{0} 模块分析失败：{1}".format(capability.name, error))
                 selections.append(CapabilitySelection(capability.name, detection.score, detection.reason, [], "已降级"))
