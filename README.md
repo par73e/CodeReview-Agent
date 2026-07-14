@@ -1,40 +1,60 @@
 # CodeReview Agent
 
-面向 Spring Boot + MySQL + Nacos + Vue 课程设计项目的引导式命令行代码审查 Agent。
-
 它先建立项目关系图和风险优先级，再将带有技术边界与代码证据要求的任务交给 DeepSeek 或本地 Ollama 审查。工具只审查代码，不会自动修改代码。
 
 ## 安装与启动
 
 需要 Python 3.9 或更高版本。
 
-```bash
-cd /Users/louis/上电/Project/CRA
-python3 -m pip install --user .
+### macOS
 
-cd /path/to/your/project
-"$(python3 -m site --user-base)/bin/codereview"
-```
-
-如果希望以后直接输入 `codereview`，将用户 Python 命令目录加入 zsh 路径后重开终端：
+在 CodeReview Agent 仓库根目录执行一次：
 
 ```bash
-echo 'export PATH="$(python3 -m site --user-base)/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+cd <CodeReview-Agent 仓库根目录>
+./run install
 ```
 
-不想安装也可以在待审查项目目录中直接运行：
+按提示确认后，程序会创建 `codereview` 快捷命令，并按需提示将其加入终端路径。完成后重新打开终端，或执行提示的 `source` 命令。
+
+进入待审查项目目录后运行：
 
 ```bash
-python3 /Users/louis/上电/Project/CRA/run_agent.py
+cd <待审查项目目录>
+codereview
 ```
 
-在本仓库中执行一次 `./run install`，按提示确认后，会创建用户自己的 `codereview` 快捷命令；之后可在任意项目目录直接运行 `codereview`。
+不创建快捷命令时，也可以在待审查项目目录中直接运行：
 
-首次启动会引导选择 DeepSeek 或 Ollama，并将默认配置保存到 `~/.codereview/config.json`。之后执行 `codereview` 会直接使用该配置；需要修改时执行：
+```bash
+python3 <CodeReview-Agent 仓库根目录>/run_agent.py
+```
+
+### Windows
+
+先安装 Python 3.9 或更高版本；安装时勾选 **Add Python to PATH**。在 PowerShell 中确认：
+
+```powershell
+py --version
+```
+
+Windows 无需安装 Python 包，也不使用 `./run install`。进入待审查项目目录后，直接指定 Agent 仓库中的启动文件：
+
+```powershell
+cd <待审查项目目录>
+py <CodeReview-Agent 仓库根目录>\run_agent.py
+```
+
+首次启动会引导选择 DeepSeek 或 Ollama，并保存默认配置。之后每次启动会直接使用该配置；需要修改时执行：
 
 ```bash
 codereview config
+```
+
+Windows 使用直接启动方式时，可在待审查项目目录执行：
+
+```powershell
+py <CodeReview-Agent 仓库根目录>\run_agent.py config
 ```
 
 ## 当前能力
