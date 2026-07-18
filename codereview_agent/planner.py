@@ -62,21 +62,49 @@ def build_review_plan(project: ProjectMap) -> List[ReviewTask]:
 
 
 def estimate_tokens(project: ProjectMap, tasks: List[ReviewTask], output_per_task: int = 1600) -> Dict[str, int]:
+    # Imported lazily to avoid coupling plan construction to the review executor.
+    from .review import REVIEW_SYSTEM, VERIFY_SYSTEM
+
     source_by_path = {item.relative_path: item for item in project.files}
     input_chars = 0
+    verification_contexts = []
     for task in tasks:
+        task_kind = task.metadata.get("kind")
+        if task_kind in {"endpoint_chain", "springvue_config"}:
+            from .capabilities.springvue.planner import build_chain_context, build_config_context
+            context = build_chain_context(task) if task_kind == "endpoint_chain" else build_config_context(task)
+            input_chars += len(REVIEW_SYSTEM) + len(context)
+            # Reserve one selective verification for each task. Most runs use less.
+            verification_contexts.append(len(VERIFY_SYSTEM) + len(context))
+            continue
         seen: Set[str] = set()
+        task_chars = len(REVIEW_SYSTEM)
         for path in task.target_paths + task.related_paths:
             if path in seen or path not in source_by_path:
                 continue
             seen.add(path)
-            input_chars += min(len(source_by_path[path].content), 18000)
-    # Conservative rough estimate suitable for a confirmation prompt, not billing.
+            task_chars += min(len(source_by_path[path].content), 18000)
+        input_chars += task_chars
+        verification_contexts.append(len(VERIFY_SYSTEM) + task_chars)
+    # Character ratios are provider-dependent; these values are planning estimates.
     input_tokens = max(1, input_chars // 3)
-    return {"input": input_tokens, "output_max": len(tasks) * output_per_task, "total_max": input_tokens + len(tasks) * output_per_task}
+    output_max = len(tasks) * output_per_task
+    verification_slots = min(len(tasks), max(2, (len(tasks) + 3) // 4)) if tasks else 0
+    verification_chars = sum(sorted(verification_contexts, reverse=True)[:verification_slots])
+    verification_reserve = max(0, verification_chars // 3 + verification_slots * 500)
+    return {
+        "input": input_tokens,
+        "output_max": output_max,
+        "verification_reserve": verification_reserve,
+        "total_max": input_tokens + output_max + verification_reserve,
+    }
 
 
 def build_context(project: ProjectMap, task: ReviewTask) -> str:
+    task_kind = task.metadata.get("kind")
+    if task_kind in {"endpoint_chain", "springvue_config"}:
+        from .capabilities.springvue.planner import build_chain_context, build_config_context
+        return build_chain_context(task) if task_kind == "endpoint_chain" else build_config_context(task)
     source_by_path = {item.relative_path: item for item in project.files}
     sections: List[str] = ["项目技术栈：" + "、".join(project.technologies)]
     sections.append("任务范围：" + task.domain)

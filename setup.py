@@ -4,7 +4,7 @@ from setuptools import find_packages, setup
 setup(
     name="codereview-agent",
     version="0.1.0",
-    description="Guided, LLM-first code review agent for Spring Boot + MySQL + Nacos + Vue projects",
+    description="Guided, modular, LLM-first code review agent with evidence-aware reporting",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     python_requires=">=3.9",

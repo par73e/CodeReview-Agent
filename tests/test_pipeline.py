@@ -145,7 +145,21 @@ class PipelineTests(unittest.TestCase):
         spring = next(item for item in run.selections if item.name == "SpringVue")
         self.assertGreaterEqual(spring.score, 0.5)
         self.assertFalse(any(item.name == "Generic" for item in run.selections))
-        self.assertTrue(any(task.domain == "接口安全与权限" for task in run.tasks))
+        chain_tasks = [task for task in run.tasks if task.metadata.get("kind") == "endpoint_chain"]
+        self.assertTrue(chain_tasks)
+        self.assertTrue(any(task.metadata.get("endpoint") == "GET /users" for task in chain_tasks))
+
+    def test_spring_capability_without_endpoint_chains_falls_back_to_layered_plan(self):
+        sources = [
+            SourceFile(self.root / "DemoApplication.java", "DemoApplication.java", "java", "@SpringBootApplication class DemoApplication {}", 1),
+            SourceFile(self.root / "UserService.java", "UserService.java", "java", "@Service class UserService { public void save() {} }", 1),
+        ]
+
+        run = build_default_registry().analyze(self.root, sources)
+
+        self.assertTrue(run.tasks)
+        self.assertFalse(any(task.metadata.get("kind") == "endpoint_chain" for task in run.tasks))
+        self.assertTrue(any(task.domain == "业务正确性与事务" for task in run.tasks))
 
     def test_generic_capability_claims_only_uncovered_code_in_mixed_project(self):
         self._write("tools/check.go", "package tools\nfunc Check() { secret := \"not-for-production\" }\n")

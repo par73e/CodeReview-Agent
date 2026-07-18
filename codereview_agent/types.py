@@ -34,6 +34,7 @@ class ProjectMap:
     config_findings: List[Dict[str, str]]
     relations: List[Relation]
     signals: List[Dict[str, str]]
+    analysis_summary: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -45,6 +46,7 @@ class ReviewTask:
     related_paths: List[str]
     checklist: List[str]
     rationale: str
+    metadata: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +64,12 @@ class Issue:
     needs_human_confirmation: bool = False
     review_status: str = "initial"
     task_id: str = ""
+    chain_id: str = ""
+    endpoint: str = ""
+    chain_status: str = ""
+    chain_path: str = ""
+    chain_gaps: List[str] = field(default_factory=list)
+    affected_endpoints: List[str] = field(default_factory=list)
 
 
 @dataclass

@@ -10,11 +10,13 @@ from .types import Issue, ProjectMap, ReviewResult, ReviewTask, Usage
 
 
 REVIEW_SYSTEM = """你是 CodeReview Agent 的受约束代码审查引擎。你只审查提供的代码和事实关系，
-不能根据缺失信息猜测。每个结论必须有文件、行号或明确代码证据，以及可复现的触发/调用路径。
-安全问题必须说明外部输入、处理过程和危险落点。没有足够证据时必须标为 needs_human_confirmation=true。
-只输出 JSON 对象，不要使用 Markdown。每个任务最多报告 3 个证据最充分、优先级最高的问题；每个文本字段保持简洁，避免超过 80 个汉字。needs_human_confirmation 必须是 JSON 布尔值 true 或 false，不能是字符串。JSON 必须为：
+不能根据缺失信息猜测。每个结论必须有文件、准确行号、可在代码中核对的直接证据，以及可复现的触发/调用路径。
+安全问题必须同时说明外部输入、处理过程和危险落点。没有足够证据时不得报告为确定问题。
+issues 数组允许为空；没有可靠问题时必须返回 {"issues":[]}。禁止为了凑数量输出假设、最佳实践或重复根因。
+不得把“若存在”“可能在其他位置”“未展示完整代码”“当前代码安全”等推测写成问题；不得仅凭缺少注解认定鉴权、事务或并发缺陷。
+MyBatis #{} 是参数绑定，不能报告为 SQL 注入；单次数据库写入缺少 @Transactional 不构成事务 Bug；身份请求头必须结合网关认证和服务暴露边界判断。
+只输出 JSON 对象，不要使用 Markdown。每个任务报告 0 到 3 个证据最充分、优先级最高的问题；同一根因只报告一次。每个文本字段保持简洁，避免超过 80 个汉字。needs_human_confirmation 必须是 JSON 布尔值 true 或 false，不能是字符串。JSON 必须为：
 {"issues":[{"category":"...","severity":"严重 Bug|中等 Bug|轻度 Bug|优化建议","title":"...","file":"...","line":1,"evidence":"...","trigger_path":"...","impact":"...","recommendation":"...","confidence":"高|中|低","needs_human_confirmation":false}]}。
-例如：{"issues":[{"category":"参数校验","severity":"中等 Bug","title":"缺少请求参数校验","file":"UserController.java","line":18,"evidence":"接口参数未使用校验注解","trigger_path":"POST /users","impact":"非法参数可能进入业务层","recommendation":"为 DTO 添加校验注解并启用 @Valid","confidence":"高","needs_human_confirmation":false}]}。
 不得输出没有代码依据的泛泛建议。"""
 
 VERIFY_SYSTEM = """你是独立严重等级复核器。只根据提供的原始结论、代码证据和调用关系判定严重等级。
@@ -44,6 +46,7 @@ def run_review(project: ProjectMap, tasks: List[ReviewTask], client: Optional[Mo
 
     result.issues = _deduplicate(_validate_evidence(project, result.issues))
     _verify_critical(project, result, client, output)
+    result.issues = _deduplicate(result.issues)
     return result
 
 
@@ -58,7 +61,9 @@ def _review_task(project: ProjectMap, task: ReviewTask, client: ModelClient, usa
         reply = client.review(REVIEW_SYSTEM, request, 1600)
         usage.add(reply.usage)
         try:
-            return _parse_issues(reply.content, task.task_id)
+            issues = _parse_issues(reply.content, task.task_id)
+            _bind_task_metadata(issues, task)
+            return issues
         except ModelError:
             if attempt:
                 raise
@@ -94,11 +99,32 @@ def _parse_issues(content: str, task_id: str) -> List[Issue]:
     return issues
 
 
+def _bind_task_metadata(issues: Iterable[Issue], task: ReviewTask) -> None:
+    """Bind findings to the Agent-proven chain instead of trusting model fields."""
+    if task.metadata.get("kind") != "endpoint_chain":
+        return
+    chain_id = str(task.metadata.get("chain_id", ""))
+    endpoint = str(task.metadata.get("endpoint", ""))
+    chain_status = str(task.metadata.get("chain_status", ""))
+    chain_path = str(task.metadata.get("chain_path", ""))
+    raw_gaps = task.metadata.get("chain_gaps", [])
+    chain_gaps = [str(item) for item in raw_gaps] if isinstance(raw_gaps, list) else []
+    for issue in issues:
+        issue.chain_id = chain_id
+        issue.endpoint = endpoint
+        issue.chain_status = chain_status
+        issue.chain_path = chain_path
+        issue.chain_gaps = list(chain_gaps)
+        issue.affected_endpoints = [endpoint] if endpoint else []
+
+
 def _verify_critical(project: ProjectMap, result: ReviewResult, client: ModelClient, output=print) -> None:
-    critical = [issue for issue in result.issues if issue.severity == "严重 Bug" and not issue.needs_human_confirmation]
+    critical = [issue for issue in result.issues if issue.severity == "严重 Bug"]
+    tasks_by_id = {task.task_id: task for task in result.tasks}
+    rejected_ids = set()
     for index, issue in enumerate(critical, start=1):
         output("正在二次复核严重问题 [{0}/{1}]：{2}".format(index, len(critical), issue.title))
-        context = _issue_context(project, issue)
+        context = _issue_context(project, issue, tasks_by_id.get(issue.task_id))
         try:
             reply = client.review(VERIFY_SYSTEM, context, 500)
             result.usage.add(reply.usage)
@@ -110,9 +136,7 @@ def _verify_critical(project: ProjectMap, result: ReviewResult, client: ModelCli
                 issue.needs_human_confirmation = False
                 issue.review_status = "二次复核成立" if recommended == "严重 Bug" else "二次复核成立，已校准为 " + recommended
             elif verdict == "不成立":
-                issue.review_status = "二次复核不成立"
-                issue.needs_human_confirmation = True
-                issue.severity = "需人工确认"
+                rejected_ids.add(id(issue))
             else:
                 issue.review_status = "二次复核证据不足"
                 issue.needs_human_confirmation = True
@@ -122,9 +146,22 @@ def _verify_critical(project: ProjectMap, result: ReviewResult, client: ModelCli
             issue.needs_human_confirmation = True
             issue.severity = "需人工确认"
             output("  复核失败，已降为需人工确认：{0}".format(error))
+    if rejected_ids:
+        result.issues = [issue for issue in result.issues if id(issue) not in rejected_ids]
+    for issue in result.issues:
+        if issue.severity == "严重 Bug" and issue.review_status != "二次复核成立":
+            _mark_manual(issue, "严重等级未通过独立二次复核")
 
 
-def _issue_context(project: ProjectMap, issue: Issue) -> str:
+def _issue_context(project: ProjectMap, issue: Issue, task: Optional[ReviewTask] = None) -> str:
+    task_kind = task.metadata.get("kind") if task is not None else ""
+    if task is not None and task_kind in {"endpoint_chain", "springvue_config"}:
+        task_context = build_context(project, task)
+        boundary = "链路断点不得自行补全" if task_kind == "endpoint_chain" else "被脱敏值和远程配置不得自行推断"
+        return (
+            "初审结论：{0}\n影响：{1}\n触发路径：{2}\n证据：{3}\n"
+            "以下为 Agent 针对该任务构建的审查上下文。{4}：\n\n{5}"
+        ).format(issue.title, issue.impact, issue.trigger_path, issue.evidence, boundary, task_context)
     source = next((item for item in project.files if item.relative_path == issue.file), None)
     source_text = "未找到对应文件。"
     if source:
@@ -142,26 +179,260 @@ def _validate_evidence(project: ProjectMap, issues: Iterable[Issue]) -> List[Iss
     valid: List[Issue] = []
     for issue in issues:
         if not issue.file or issue.file not in known or not issue.evidence.strip():
-            issue.needs_human_confirmation = True
-            issue.severity = "需人工确认"
-            issue.review_status = "证据不完整"
+            _mark_manual(issue, "证据不完整")
         elif issue.line is not None and (issue.line < 1 or issue.line > known[issue.file].line_count):
-            issue.needs_human_confirmation = True
-            issue.severity = "需人工确认"
-            issue.review_status = "行号超出文件范围"
+            _mark_manual(issue, "行号超出文件范围")
+        else:
+            decision, reason = _govern_issue(project, issue, known[issue.file])
+            if decision == "reject":
+                continue
+            if decision == "manual" or issue.needs_human_confirmation or issue.severity == "需人工确认":
+                _mark_manual(issue, reason or "模型标记为需要人工确认")
+            else:
+                issue.review_status = "证据校验通过"
         valid.append(issue)
     return valid
 
 
+def _govern_issue(project: ProjectMap, issue: Issue, source) -> Tuple[str, str]:
+    """Apply precision-first, stack-aware policies before a model claim reaches users."""
+    combined = " ".join([issue.category, issue.title, issue.evidence, issue.trigger_path, issue.impact, issue.recommendation])
+    lowered = combined.lower()
+
+    if _contains_any(combined, (
+        "当前代码正确", "当前代码为 #{}", "当前代码使用 #{}", "当前片段安全", "实际安全",
+        "无直接证据", "未展示完整", "未显示完整", "根据上下文推断", "若存在 ${}", "如果存在 ${}",
+    )):
+        return "reject", "候选结论与其自身证据矛盾"
+
+    if _is_sql_injection_claim(lowered) and not _has_sql_injection_sink(source.content):
+        return "reject", "对应源码中未发现 SQL 字符串替换或输入拼接落点"
+
+    if ("hashmap" in lowered or "线程安全" in combined) and "ConcurrentHashMap" in source.content:
+        return "reject", "源码使用 ConcurrentHashMap，与候选结论矛盾"
+
+    if _contains_any(combined, ("未设置过期", "没有过期", "无过期清理", "永久驻留", "没有清理机制")):
+        if _has_expiry_or_cleanup(source.content):
+            return "reject", "源码中存在清理或过期机制"
+
+    if _claims_missing_required_header(combined) and _required_request_header_at(source.content, issue.line):
+        return "reject", "@RequestHeader 默认要求请求头存在"
+
+    if _is_single_write_transaction_claim(combined, source.content, issue.line):
+        return "reject", "单次数据库写入缺少事务注解不构成事务缺陷"
+
+    if _contains_any(combined, ("多个服务共享同一数据库", "共享同一数据库连接")):
+        issue.severity = "优化建议"
+
+    if _contains_any(combined, ("直接返回实体", "价格、库存等", "价格、库存")):
+        if not _contains_any(source.content.lower(), ("password", "secret", "token", "credential")):
+            return "reject", "当前证据未指出实体中存在凭据或高敏感字段"
+
+    if _contains_any(combined, ("返回了不应暴露的字段", "返回未使用字段", "前端仅使用")):
+        if not _contains_any(combined.lower(), ("password", "secret", "token", "credential", "身份证", "手机号")):
+            issue.severity = "优化建议"
+
+    if _contains_any(combined, ("路径参数未校验", "缺少路径参数校验", "未使用 @Min", "未校验范围")) or (
+        "@PathVariable" in combined and "校验" in combined
+    ):
+        if issue.severity in {"严重 Bug", "中等 Bug"}:
+            issue.severity = "轻度 Bug"
+
+    if _is_unhandled_runtime_claim(combined):
+        if _has_global_exception_handler(project, issue.file):
+            return "reject", "对应服务存在全局异常处理器，候选结论所称的未捕获或堆栈泄露不成立"
+        if issue.severity in {"严重 Bug", "中等 Bug"}:
+            issue.severity = "轻度 Bug"
+
+    if _is_generic_lost_update_claim(combined) and not _contains_any(combined, ("重复下单", "重复订单", "唯一约束", "唯一性", "幂等")):
+        issue.severity = "优化建议"
+
+    if _is_identity_header_claim(combined) and _has_gateway_identity_boundary(project):
+        issue.title = "身份请求头的服务边界需要确认"
+        return "manual", "已发现 JWT 网关身份注入，但无法仅凭源码确认服务是否可绕过网关访问"
+
+    if _contains_any(combined, ("内部接口未做鉴权", "内部接口没有鉴权", "internal 但无")) and _has_gateway_identity_boundary(project):
+        issue.title = "内部接口的访问边界需要确认"
+        return "manual", "已发现 JWT 网关保护，但仍需确认内部接口的路由意图和服务端口暴露范围"
+
+    if _contains_any(combined, ("日志记录用户ID和用户名", "日志中明文存储用户ID和用户名")):
+        return "reject", "用户标识属于常规审计字段，当前证据未显示凭据或高敏感数据泄露"
+
+    if issue.severity == "严重 Bug":
+        if issue.confidence != "高":
+            return "manual", "严重等级缺少高置信度直接证据"
+        if issue.chain_status in {"partial", "needs_confirmation"}:
+            return "manual", "严重等级所在数据通路尚未完整解析"
+        if _contains_any(combined, ("需确认", "若未", "若存在", "如果存在", "可能在其他", "风险较低")):
+            return "manual", "严重等级仍依赖未证明的前提"
+
+    if _contains_any(issue.evidence, ("需确认", "未展示", "未显示", "根据上下文推断", "无直接证据")):
+        return "manual", "证据包含尚未验证的推断"
+    return "keep", ""
+
+
+def _mark_manual(issue: Issue, reason: str) -> None:
+    issue.needs_human_confirmation = True
+    issue.severity = "需人工确认"
+    issue.review_status = "需人工确认：" + reason
+
+
+def _contains_any(text: str, values: Iterable[str]) -> bool:
+    return any(value in text for value in values)
+
+
+def _is_sql_injection_claim(lowered: str) -> bool:
+    return "sql 注入" in lowered or "sql注入" in lowered or "sql injection" in lowered
+
+
+def _has_sql_injection_sink(content: str) -> bool:
+    if "${" in content:
+        return True
+    return bool(re.search(
+        r"(?is)\b(select|update|delete|insert)\b.{0,240}?[\"']\s*\+\s*(?![\"'])[A-Za-z_(]",
+        content,
+    ))
+
+
+def _has_expiry_or_cleanup(content: str) -> bool:
+    lowered = content.lower()
+    explicit_ttl = _contains_any(lowered, ("expireafter", "time-to-live", "ttl", "setex", "expire("))
+    scheduled_clear = (".clear(" in content or ".remove(" in content) and _contains_any(
+        lowered, ("thread.sleep", "@scheduled", "timer", "scheduleatfixedrate"),
+    )
+    return explicit_ttl or scheduled_clear
+
+
+def _claims_missing_required_header(text: str) -> bool:
+    return "requestheader" in text.lower() and _contains_any(text, (
+        "缺失则", "缺失时", "可能为 null", "未做非空", "required 属性", "@RequestParam(required",
+    ))
+
+
+def _required_request_header_at(content: str, line: Optional[int]) -> bool:
+    lines = content.splitlines()
+    center = max(0, (line or 1) - 1)
+    window = "\n".join(lines[max(0, center - 4):min(len(lines), center + 5)])
+    return "@RequestHeader" in window and "required = false" not in window and "required=false" not in window
+
+
+def _is_single_write_transaction_claim(text: str, content: str, line: Optional[int]) -> bool:
+    if not _contains_any(text, ("缺少事务", "未声明事务", "无事务保障", "未使用事务")):
+        return False
+    if _contains_any(text, ("当前仅一个", "当前仅单", "未来扩展", "若后续", "以后增加")):
+        return True
+    method = _method_window(content, line)
+    writes = re.findall(
+        r"\.(?:save|saveBatch|insert|update|updateById|remove|removeById|delete|deleteById)\s*\(",
+        method,
+    )
+    return len(writes) <= 1
+
+
+def _method_window(content: str, line: Optional[int]) -> str:
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    center = max(0, min(len(lines) - 1, (line or 1) - 1))
+    start = center
+    while start > 0 and not re.search(r"\b(public|protected|private)\b.*\([^;]*\)", lines[start]):
+        start -= 1
+    depth = 0
+    opened = False
+    end = min(len(lines), start + 120)
+    for index in range(start, end):
+        depth += lines[index].count("{") - lines[index].count("}")
+        opened = opened or "{" in lines[index]
+        if opened and depth <= 0:
+            end = index + 1
+            break
+    return "\n".join(lines[start:end])
+
+
+def _is_unhandled_runtime_claim(text: str) -> bool:
+    return "runtimeexception" in text.lower() and _contains_any(text, ("500", "异常处理", "泄露堆栈", "友好错误"))
+
+
+def _is_generic_lost_update_claim(text: str) -> bool:
+    return _contains_any(text, ("并发覆盖", "竞态条件", "乐观锁", "状态覆盖"))
+
+
+def _is_identity_header_claim(text: str) -> bool:
+    lowered = text.lower()
+    mentions_header = "x-user-role" in lowered or "x-user-id" in lowered or "身份请求头" in text
+    return mentions_header and _contains_any(text, ("伪造", "篡改", "绕过", "可信", "鉴权", "未校验", "任意", "当前登录", "服务边界"))
+
+
+def _has_gateway_identity_boundary(project: ProjectMap) -> bool:
+    gateway_text = "\n".join(
+        source.content for source in project.files
+        if source.language == "java" and ("gateway" in source.relative_path.lower() or "GlobalFilter" in source.content)
+    )
+    return (
+        "GlobalFilter" in gateway_text
+        and ("validate(" in gateway_text or "parseToken(" in gateway_text)
+        and ("X-User-Role" in gateway_text or "X-User-Id" in gateway_text)
+    )
+
+
+def _has_global_exception_handler(project: ProjectMap, issue_file: str) -> bool:
+    scope = _module_scope(issue_file)
+    return any(
+        _module_scope(source.relative_path) == scope
+        and "@RestControllerAdvice" in source.content
+        and "@ExceptionHandler" in source.content
+        for source in project.files
+        if source.language == "java"
+    )
+
+
 def _deduplicate(issues: Iterable[Issue]) -> List[Issue]:
-    selected: Dict[Tuple[str, str, int], Issue] = {}
+    selected: Dict[Tuple[str, str, str, int], Issue] = {}
     rank = {"严重 Bug": 4, "中等 Bug": 3, "轻度 Bug": 2, "优化建议": 1, "需人工确认": 0}
     for issue in issues:
-        fingerprint = (issue.category.strip().lower(), issue.file, issue.line or 0)
+        fingerprint = _root_cause_key(issue)
         old = selected.get(fingerprint)
-        if old is None or rank.get(issue.severity, 0) > rank.get(old.severity, 0):
+        if old is None:
             selected[fingerprint] = issue
+            continue
+        endpoints = list(dict.fromkeys(old.affected_endpoints + issue.affected_endpoints))
+        if rank.get(issue.severity, 0) > rank.get(old.severity, 0):
+            issue.affected_endpoints = endpoints
+            selected[fingerprint] = issue
+        else:
+            old.affected_endpoints = endpoints
     return sorted(selected.values(), key=lambda item: (-rank.get(item.severity, 0), item.file, item.line or 0))
+
+
+def _root_cause_key(issue: Issue) -> Tuple[str, str, str, int]:
+    combined = " ".join([issue.category, issue.title, issue.evidence]).lower()
+    if _is_identity_header_claim(combined):
+        return ("root", "trusted_identity_header", "", 0)
+    if _is_unhandled_runtime_claim(combined):
+        return ("root", "unhandled_business_exception", _module_scope(issue.file), 0)
+    if _contains_any(combined, ("分页参数未做上限", "大分页", "分页上限")):
+        return ("root", "unbounded_page_size", _module_scope(issue.file), 0)
+    if _contains_any(combined, ("catch 块未处理", "catch块未处理", "异常处理过于宽泛", "未处理 http 错误")):
+        return ("root", "silent_frontend_error", _module_scope(issue.file), 0)
+    if _contains_any(combined, ("路径参数未校验", "缺少路径参数校验", "未校验范围", "@pathvariable")):
+        return ("root", "path_parameter_validation", _module_scope(issue.file), 0)
+    if _contains_any(combined, ("缺少请求参数校验", "dto 未使用 @valid", "dto字段无校验", "dto 字段无校验")):
+        return ("root", "request_dto_validation", issue.file, 0)
+    if _is_generic_lost_update_claim(combined) and not _contains_any(combined, ("重复下单", "重复订单", "唯一约束", "唯一性", "幂等")):
+        return ("root", "state_update_concurrency", _module_scope(issue.file), 0)
+    if _contains_any(combined, ("缺少事务", "未声明事务", "未使用事务", "未在同一事务")):
+        return ("root", "multi_write_transaction", issue.file, 0)
+    return (
+        issue.category.strip().lower(),
+        issue.title.strip().lower(),
+        issue.file,
+        issue.line or 0,
+    )
+
+
+def _module_scope(path: str) -> str:
+    marker = "/src/"
+    return path.split(marker, 1)[0] if marker in path else path.split("/", 1)[0]
 
 
 def _local_findings(project: ProjectMap) -> List[Issue]:

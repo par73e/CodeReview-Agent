@@ -1,0 +1,6 @@
+<mapper namespace="demo.OrderMapper">
+    <insert id="insertOrder">
+        INSERT INTO orders(user_id, amount)
+        VALUES(#{request.userId}, #{request.amount})
+    </insert>
+</mapper>

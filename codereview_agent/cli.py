@@ -74,15 +74,16 @@ def _review_target(target: Path, config: AppConfig) -> None:
     if not tasks:
         print("未能从当前目录构建可执行的能力模块审查任务。")
         return
-    print("\n审查计划：")
-    for task in tasks:
-        print("- P{0} {1}：{2} 个目标文件".format(task.priority, task.domain, len(task.target_paths)))
+    _print_review_plan(tasks)
 
     client = make_client(config)
     if client is not None:
         estimate = estimate_tokens(project, tasks)
         print("\nToken 预估（仅为执行前估算，不等同实际账单）：")
-        print("输入约 {0}，最大输出 {1}，合计上限约 {2}".format(estimate["input"], estimate["output_max"], estimate["total_max"]))
+        print("初审输入约 {0}，初审最大输出 {1}".format(estimate["input"], estimate["output_max"]))
+        print("严重问题复核预留约 {0}，总量参考上限约 {1}".format(
+            estimate.get("verification_reserve", 0), estimate["total_max"],
+        ))
         if input("是否继续进行模型审查？[y/N]：").strip().lower() not in {"y", "yes"}:
             print("已取消本次审查。")
             return
@@ -130,6 +131,39 @@ def _print_capabilities(capability_run) -> None:
     print("\n本次匹配的能力模块：")
     for selection in capability_run.selections:
         print("- {0}（{1}，覆盖 {2} 个文件；依据：{3}）".format(selection.name, selection.status, len(selection.claimed_paths), selection.reason))
+
+
+def _print_review_plan(tasks) -> None:
+    print("\n审查计划：")
+    chain_tasks = [task for task in tasks if task.metadata.get("kind") == "endpoint_chain"]
+    if chain_tasks:
+        groups = {
+            "高风险链路": 0,
+            "部分或待确认链路": 0,
+            "普通写入链路": 0,
+            "查询及其他链路": 0,
+        }
+        for task in chain_tasks:
+            risk_score = int(task.metadata.get("risk_score", 0) or 0)
+            status = str(task.metadata.get("chain_status", ""))
+            risk_reasons = task.metadata.get("risk_reasons", [])
+            if risk_score >= 50:
+                groups["高风险链路"] += 1
+            elif status in {"partial", "needs_confirmation"}:
+                groups["部分或待确认链路"] += 1
+            elif isinstance(risk_reasons, list) and any(item in {"写接口", "数据库写操作"} for item in risk_reasons):
+                groups["普通写入链路"] += 1
+            else:
+                groups["查询及其他链路"] += 1
+        for label, count in groups.items():
+            if count:
+                print("- {0}：{1} 条".format(label, count))
+    for task in tasks:
+        if task.metadata.get("kind") == "endpoint_chain":
+            continue
+        unit = "项" if task.metadata.get("kind") == "springvue_config" else "个目标文件"
+        count = 1 if unit == "项" else len(task.target_paths)
+        print("- {0}：{1} {2}".format(task.domain, count, unit))
 
 
 def _install_shortcut() -> None:

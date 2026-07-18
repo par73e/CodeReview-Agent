@@ -101,6 +101,7 @@ def _merge_projects(root: Path, files: List[SourceFile], results: List[Capabilit
     config_findings: List[Dict[str, str]] = []
     relations: List[Relation] = []
     signals: List[Dict[str, str]] = []
+    analysis_summary: Dict[str, object] = {}
     for result in results:
         project = result.project
         for technology in project.technologies:
@@ -114,4 +115,5 @@ def _merge_projects(root: Path, files: List[SourceFile], results: List[Capabilit
         config_findings.extend(project.config_findings)
         relations.extend(project.relations)
         signals.extend(project.signals)
-    return ProjectMap(root, files, technologies or ["未识别的项目类型"], dict(roles), routes, api_calls, sql_operations, config_findings, relations, signals)
+        analysis_summary.update(project.analysis_summary)
+    return ProjectMap(root, files, technologies or ["未识别的项目类型"], dict(roles), routes, api_calls, sql_operations, config_findings, relations, signals, analysis_summary)
